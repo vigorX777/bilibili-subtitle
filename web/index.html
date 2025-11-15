@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>B站字幕获取与通义听悟转写</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Noto Sans",sans-serif;line-height:1.5;margin:0;background:#f7f7f8;color:#1f2328}
+    header{background:#fff;border-bottom:1px solid #e5e7eb;padding:16px 20px;font-weight:600}
+    main{max-width:900px;margin:0 auto;padding:20px}
+    section{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px}
+    h2{font-size:18px;margin:0 0 12px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .col{flex:1 1 280px}
+    label{display:block;font-size:13px;margin-bottom:6px;color:#444}
+    input,select,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;background:#fafafa}
+    textarea{min-height:140px}
+    button{padding:10px 14px;border:1px solid #1f2937;background:#111827;color:#fff;border-radius:6px;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .secondary{background:#fff;color:#111827;border-color:#d1d5db}
+    .grid{display:grid;grid-template-columns:1fr;gap:10px}
+    .result{white-space:pre-wrap;background:#0b1021;color:#e5e7eb;padding:12px;border-radius:6px;font-family:ui-monospace,Consolas,Monaco,monospace}
+    .flex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .hint{font-size:12px;color:#666}
+  </style>
+</head>
+<body>
+  <header>字幕获取与转写</header>
+  <main>
+    <section>
+      <h2>B站视频</h2>
+      <div class="row">
+        <div class="col">
+          <label>视频链接</label>
+          <input id="input-url" placeholder="https://www.bilibili.com/video/BV...">
+        </div>
+        <div class="col">
+          <label>分P索引</label>
+          <input id="input-page" type="number" min="0" value="0">
+        </div>
+        <div class="col">
+          <label>字幕优先</label>
+          <select id="input-prefer">
+            <option value="ai">AI字幕优先</option>
+            <option value="native">内置中文优先</option>
+          </select>
+        </div>
+      </div>
+      <div class="flex" style="margin-top:10px">
+        <button id="btn-check">检查字幕并生成MD</button>
+        <button class="secondary" id="btn-open-snapany">打开SnapAny并复制链接</button>
+        <span class="hint" id="status"></span>
+      </div>
+      <div style="margin-top:10px" class="grid">
+        <textarea id="md-output" placeholder="这里将显示生成的Markdown"></textarea>
+        <div class="flex">
+          <button id="btn-copy-md" class="secondary">复制MD</button>
+          <button id="btn-download-md" class="secondary">下载MD文件</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>通义听悟</h2>
+      <div class="row">
+        <div class="col">
+          <label>AccessKey ID</label>
+          <input id="ak-id" placeholder="AK">
+        </div>
+        <div class="col">
+          <label>AccessKey Secret</label>
+          <input id="ak-secret" type="password" placeholder="Secret">
+        </div>
+        <div class="col">
+          <label>AppKey</label>
+          <input id="app-key" placeholder="AppKey">
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div class="col">
+          <label>公开可访问的视频文件URL</label>
+          <input id="file-url" placeholder="https://...">
+        </div>
+        <div class="col">
+          <label>语种</label>
+          <select id="lang">
+            <option value="auto">auto</option>
+            <option value="cn">cn</option>
+            <option value="en">en</option>
+            <option value="yue">yue</option>
+            <option value="ja">ja</option>
+            <option value="ko">ko</option>
+          </select>
+        </div>
+      </div>
+      <div class="flex" style="margin-top:10px">
+        <button id="btn-build-json">生成请求JSON</button>
+        <button id="btn-build-curl" class="secondary">生成curl模板</button>
+        <a href="https://help.aliyun.com/zh/tingwu/offline-transcribe-of-audio-and-video-files" target="_blank">API文档</a>
+      </div>
+      <div style="margin-top:10px" class="grid">
+        <textarea id="tingwu-json" placeholder="请求JSON"></textarea>
+        <textarea id="tingwu-curl" placeholder="curl命令模板"></textarea>
+        <div class="flex">
+          <button id="btn-copy-json" class="secondary">复制JSON</button>
+          <button id="btn-copy-curl" class="secondary">复制curl</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const q = s => document.querySelector(s)
+    function extractBVID(u){ const m = (u||'').match(/BV[0-9A-Za-z]+/); return m?m[0]:null }
+    async function jget(url){ const r = await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'}}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json() }
+    async function getView(bvid){ return jget(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`) }
+    function pickCid(view,page){ const pages = (view.data&&view.data.pages)||[]; if(!pages.length) return view.data&&view.data.cid; const idx=Math.max(0,Math.min(page,pages.length-1)); return pages[idx].cid }
+    async function getPlayer(bvid,cid){ return jget(`https://api.bilibili.com/x/player/v2?cid=${cid}&bvid=${bvid}`) }
+    function collectSubs(player){ const subs = (((player||{}).data||{}).subtitle||{}).subtitles||[]; return subs.map(s=>({lan:s.lan,lan_doc:s.lan_doc,url:s.subtitle_url})) }
+    function chooseSub(subs,prefer){ if(!subs.length) return null; if(prefer==='ai'){ const a=subs.find(s=>String(s.lan||'').includes('ai')); if(a) return a } const zh=subs.find(s=> (s.lan_doc&&(/中文|简体/.test(s.lan_doc))) || s.lan==='zh-CN'); return zh||subs[0] }
+    async function getSubtitleJson(u){ const r = await fetch(u,{headers:{'User-Agent':'Mozilla/5.0','Referer':'https://www.bilibili.com'}}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json() }
+    function parseSegments(body){ const items = (body&&body.body)||[]; return items.map(it=>({start:Number(it.from||0),end:Number(it.to||0),text:String(it.content||'').trim()})) }
+    function fmt(sec){ const s = Math.floor(sec); const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const t = s%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(t).padStart(2,'0')}` }
+    function makeMD(meta,segs,source){ const lines=[]; lines.push(`# ${meta.title||''}`); lines.push(''); lines.push(`- 来源: ${meta.url||''}`); lines.push(`- 作者: ${meta.owner||''}`); lines.push(`- BV号: ${meta.bvid||''}`); lines.push(`- 字幕来源: ${source}`); lines.push(''); lines.push('## 正文'); segs.forEach(s=>{ lines.push(`- \`${fmt(s.start)}\`–\`${fmt(s.end)}\` ${s.text}`) }); return lines.join('\n') }
+    function dl(name,content){ const blob=new Blob([content],{type:'text/markdown;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove(); }
+    async function checkSubs(){ const url=q('#input-url').value.trim(); const page=Number(q('#input-page').value||0); const prefer=q('#input-prefer').value; const bvid=extractBVID(url); q('#status').textContent=''; if(!bvid){ q('#status').textContent='未识别到BV号'; return } try { const view=await getView(bvid); const cid=pickCid(view,page); if(!cid){ q('#status').textContent='未获取到CID'; return } const player=await getPlayer(bvid,cid); const subs=collectSubs(player); const meta={title:((view.data||{}).title)||'',owner:(((view.data||{}).owner||{}).name)||'',bvid,url}; if(!subs.length){ q('#status').textContent='无内置字幕'; return } const chosen=chooseSub(subs,prefer); const body=await getSubtitleJson(chosen.url); const segs=parseSegments(body); const md=makeMD(meta,segs,chosen.lan_doc||chosen.lan||'内置'); q('#md-output').value=md; } catch(e){ q('#status').textContent='请求失败或被跨域拦截'; }
+    }
+    async function openSnapAny(){ const url=q('#input-url').value.trim(); if(url){ try{ await navigator.clipboard.writeText(url) }catch(e){} } window.open('https://snapany.com/zh/bilibili','_blank') }
+    function buildTingwuJSON(){ const fileUrl=q('#file-url').value.trim(); const appKey=q('#app-key').value.trim(); const lang=q('#lang').value; const payload={ AppKey: appKey, Input: { FileUrl: fileUrl, SourceLanguage: lang } }; q('#tingwu-json').value=JSON.stringify(payload,null,2) }
+    function buildCurl(){ const id=q('#ak-id').value.trim(); const secret=q('#ak-secret').value.trim(); const json=q('#tingwu-json').value.trim(); const cmd = [ 'curl -X POST', '<CreateTaskEndpoint>', '-H "Content-Type: application/json"', '-H "Authorization: <签名或令牌>"', `-d '${json||"{}"}'` ].join(' '); q('#tingwu-curl').value=cmd }
+    function copy(el){ const v=q(el).value; if(!v) return; navigator.clipboard.writeText(v) }
+    q('#btn-check').addEventListener('click',checkSubs)
+    q('#btn-open-snapany').addEventListener('click',openSnapAny)
+    q('#btn-copy-md').addEventListener('click',()=>copy('#md-output'))
+    q('#btn-download-md').addEventListener('click',()=>{ const url=q('#input-url').value.trim(); const bvid=extractBVID(url)||'bilibili'; const md=q('#md-output').value; if(md) dl(`${bvid}.md`,md) })
+    q('#btn-build-json').addEventListener('click',buildTingwuJSON)
+    q('#btn-build-curl').addEventListener('click',buildCurl)
+    q('#btn-copy-json').addEventListener('click',()=>copy('#tingwu-json'))
+    q('#btn-copy-curl').addEventListener('click',()=>copy('#tingwu-curl'))
+  </script>
+</body>
+</html>
